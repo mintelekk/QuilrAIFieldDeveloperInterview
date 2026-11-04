@@ -66,10 +66,12 @@ class RateLimitExceeded extends Error {
 }
 
 function cleanExpiredEvents(now = Date.now()) {
+  // A request stops consuming the rolling-window budget once its minute has elapsed.
   database.prepare("DELETE FROM token_events WHERE started_at_ms <= ?").run(now - WINDOW_MS);
 }
 
 function reserveTokens({ requestId, tenantHash, tokens, now = Date.now() }) {
+  // Lock before reading usage so concurrent requests cannot all approve against the same balance.
   database.exec("BEGIN IMMEDIATE");
   try {
     cleanExpiredEvents(now);
@@ -83,6 +85,7 @@ function reserveTokens({ requestId, tenantHash, tokens, now = Date.now() }) {
     const usedTokens = events.reduce((sum, event) => sum + Number(event.tokens), 0);
 
     if (usedTokens + tokens > TOKEN_LIMIT_PER_MINUTE) {
+      // Find when enough oldest usage will expire to admit this request again.
       let excess = usedTokens + tokens - TOKEN_LIMIT_PER_MINUTE;
       let retryAt = now + WINDOW_MS;
       for (const event of events) {
@@ -114,6 +117,7 @@ function reserveTokens({ requestId, tenantHash, tokens, now = Date.now() }) {
 function settleTokens(requestId, actualTokens) {
   if (!Number.isSafeInteger(actualTokens) || actualTokens < 0) return;
   if (actualTokens === 0) {
+    // Rejected or failed provider calls did not consume tokens, so release their reservation.
     database.prepare("DELETE FROM token_events WHERE request_id = ?").run(requestId);
     return;
   }
@@ -188,6 +192,7 @@ async function readProviderJson(response) {
 async function callProvider(provider, requestPayload, clientSignal) {
   const attemptController = new AbortController();
   let timedOut = false;
+  // Each provider gets its own deadline; the caller's abort also cancels the active attempt.
   const timer = setTimeout(() => {
     timedOut = true;
     attemptController.abort();
@@ -195,6 +200,7 @@ async function callProvider(provider, requestPayload, clientSignal) {
   const signal = AbortSignal.any([clientSignal, attemptController.signal]);
 
   try {
+    // Keep the provider-specific model choice private to this outbound request.
     const response = await fetch(provider.url, {
       method: "POST",
       headers: {
@@ -235,6 +241,7 @@ function actualUsageTokens(payload, reservation) {
 }
 
 async function handleGatewayRequest(req, res, requestId) {
+  // Validate the gateway contract before reserving quota or contacting either provider.
   if (req.method !== "POST" || new URL(req.url ?? "/", "http://localhost").pathname !== "/v1/chat/completions") {
     res.setHeader("allow", "POST");
     sendGatewayError(res, req.method === "POST" ? 404 : 405, "invalid_route", "Expected POST /v1/chat/completions", requestId);
@@ -291,6 +298,7 @@ async function handleGatewayRequest(req, res, requestId) {
   }
   const reservationId = requestId;
   try {
+    // Reserve the estimated maximum up front; SQLite makes this decision atomic per tenant.
     reserveTokens({ requestId: reservationId, tenantHash, tokens: reservation });
   } catch (error) {
     if (error instanceof RateLimitExceeded) {
@@ -314,6 +322,7 @@ async function handleGatewayRequest(req, res, requestId) {
 
   let routedProvider = primary;
   let outcome = await callProvider(primary, providerPayload, clientController.signal);
+  // Only throttling and deadline expiry trigger failover; other errors stay visible as sanitized gateway failures.
   if (outcome.kind === "rate_limited" || outcome.kind === "timeout") {
     routedProvider = secondary;
     outcome = await callProvider(secondary, providerPayload, clientController.signal);
@@ -333,6 +342,7 @@ async function handleGatewayRequest(req, res, requestId) {
     return;
   }
 
+  // Replace the estimate with provider-reported usage when available, then return the completion unchanged.
   settleTokens(reservationId, actualUsageTokens(outcome.payload, reservation));
   const body = Buffer.from(JSON.stringify(outcome.payload));
   res.writeHead(200, {

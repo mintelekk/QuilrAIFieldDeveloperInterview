@@ -11,6 +11,7 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+// Keep the timeout fixture just beyond the gateway's 3-second attempt deadline.
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -33,6 +34,7 @@ const mock = createServer(async (req, res) => {
   }
 
   const url = new URL(req.url ?? "/", "http://localhost");
+  // These modes exercise failover and confirm that upstream diagnostics never reach clients.
   if (url.pathname === "/primary" && url.searchParams.get("mode") === "429") {
     // The gateway must discard this deliberately sensitive diagnostic body.
     sendJson(res, 429, { error: { message: "quota exhausted", stack: "internal mock stack trace" } });
