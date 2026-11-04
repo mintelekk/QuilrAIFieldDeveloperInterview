@@ -1,0 +1,5 @@
+# Secrets are provided through process environment variables; never commit local .env files.
+.env
+.env.*
+!.env.example
+node_modules/

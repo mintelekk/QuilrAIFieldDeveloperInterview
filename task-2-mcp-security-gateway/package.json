@@ -1,0 +1,14 @@
+{
+  "name": "mcp-security-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bearer-authenticated HTTP/JSON-RPC MCP gateway with role-based tool filtering",
+  "scripts": {
+    "start": "node src/gateway.js",
+    "mock": "node src/mock-mcp-server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
