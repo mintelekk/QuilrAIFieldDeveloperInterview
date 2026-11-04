@@ -1,0 +1,14 @@
+{
+  "name": "llm-rate-limit-fallback-router",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Token-aware SQLite rate limiter and model failover router",
+  "scripts": {
+    "start": "node src/gateway.js",
+    "mock": "node src/mock-providers.js"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
