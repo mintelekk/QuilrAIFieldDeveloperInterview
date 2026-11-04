@@ -1,0 +1,14 @@
+{
+  "name": "llm-streaming-pii-guardrail",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Streaming LLM gateway that redacts PII in OpenAI-compatible chat deltas",
+  "scripts": {
+    "start": "node src/gateway.js",
+    "mock": "node src/mock-llm-provider.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
