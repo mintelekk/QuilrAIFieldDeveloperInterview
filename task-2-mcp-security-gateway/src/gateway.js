@@ -5,8 +5,10 @@ const PORT = Number(process.env.PORT ?? 4000);
 const DOWNSTREAM_URL = new URL(
   process.env.DOWNSTREAM_URL ?? "http://127.0.0.1:4001/mcp",
 );
+// Bound memory use when parsing an untrusted request body.
 const MAX_BODY_BYTES = 1024 * 1024;
 
+// Fail at startup rather than silently running with a missing or weak credential.
 function requiredToken(name) {
   const value = process.env[name];
   if (!value || value.length < 16) {
@@ -22,6 +24,7 @@ if (!["http:", "https:"].includes(DOWNSTREAM_URL.protocol)) {
   throw new Error("DOWNSTREAM_URL must use http or https");
 }
 
+// Store fixed-size digests and compare them in constant time; never log raw tokens.
 const roleTokens = [
   { role: "admin", digest: createHash("sha256").update(requiredToken("GATEWAY_ADMIN_TOKEN")).digest() },
   { role: "viewer", digest: createHash("sha256").update(requiredToken("GATEWAY_VIEWER_TOKEN")).digest() },
@@ -30,6 +33,7 @@ if (timingSafeEqual(roleTokens[0].digest, roleTokens[1].digest)) {
   throw new Error("GATEWAY_ADMIN_TOKEN and GATEWAY_VIEWER_TOKEN must be different");
 }
 
+// Map a valid Bearer credential to one configured role; unknown tokens fail closed.
 function getRole(authorization) {
   const match = /^Bearer\s+([^\s]+)$/i.exec(authorization ?? "");
   if (!match) return null;
@@ -51,6 +55,7 @@ function writeJson(res, statusCode, payload) {
   res.end(body);
 }
 
+// Keep gateway failures in JSON-RPC error shape so clients can handle them uniformly.
 function rpcError(id, code, message) {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
@@ -70,6 +75,7 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// Forward MCP transport headers only; the caller Bearer token stays at the gateway.
 function forwardedHeaders(req) {
   const headers = new Headers();
   for (const name of [
@@ -85,6 +91,7 @@ function forwardedHeaders(req) {
   return headers;
 }
 
+// Authorize at the HTTP edge before any downstream call can execute.
 const gateway = createServer(async (req, res) => {
   if (req.method !== "POST") {
     res.setHeader("allow", "POST");
@@ -109,6 +116,7 @@ const gateway = createServer(async (req, res) => {
     return;
   }
 
+  // Validate the JSON-RPC envelope before reading method-specific fields.
   const hasId = Boolean(message && typeof message === "object" && Object.hasOwn(message, "id"));
   const id = hasId ? message.id : null;
   const validId = id === null || typeof id === "string" || (typeof id === "number" && Number.isFinite(id));
@@ -143,6 +151,7 @@ const gateway = createServer(async (req, res) => {
     return;
   }
 
+  // Block privileged calls before the downstream can execute them.
   if (
     message.method === "tools/call" &&
     typeof message.params?.name === "string" &&
@@ -153,6 +162,7 @@ const gateway = createServer(async (req, res) => {
     return;
   }
 
+  // Forward the original JSON body unchanged after authorization.
   try {
     const downstream = await fetch(DOWNSTREAM_URL, {
       method: "POST",
@@ -160,6 +170,7 @@ const gateway = createServer(async (req, res) => {
       body: rawBody,
       redirect: "manual",
     });
+    // Preserve the downstream status and response payload for the MCP client.
     const body = Buffer.from(await downstream.arrayBuffer());
     const headers = {
       "content-length": body.length,
@@ -177,6 +188,7 @@ const gateway = createServer(async (req, res) => {
   }
 });
 
+// Loopback binding keeps this demo local; production needs explicit network controls.
 gateway.listen(PORT, "127.0.0.1", () => {
   console.error(`MCP security gateway listening on http://127.0.0.1:${PORT}/mcp`);
   console.error(`Downstream MCP server: ${DOWNSTREAM_URL.origin}${DOWNSTREAM_URL.pathname}`);

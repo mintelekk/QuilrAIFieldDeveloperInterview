@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
 
+// This server supplies deterministic responses for local gateway development only.
 const PORT = Number(process.env.MOCK_PORT ?? 4001);
+// Expose one regular tool and one protected tool to exercise the gateway policy.
 const tools = [
   {
     name: "lookup_status",
@@ -28,6 +30,7 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+// The mock speaks enough MCP JSON-RPC for an end-to-end local proxy walkthrough.
 const mock = createServer(async (req, res) => {
   if (req.method !== "POST") {
     res.writeHead(405, { allow: "POST" });
@@ -49,6 +52,7 @@ const mock = createServer(async (req, res) => {
     sendJson(res, 400, { jsonrpc: "2.0", id: message?.id ?? null, error: { code: -32600, message: "Invalid Request" } });
     return;
   }
+  // JSON-RPC notifications have no response body.
   if (!Object.hasOwn(message, "id")) {
     res.writeHead(202);
     res.end();
@@ -85,6 +89,7 @@ const mock = createServer(async (req, res) => {
       });
       return;
     }
+    // Never perform a real key reset in the mock downstream.
     if (params?.name === "admin_reset_key") {
       sendJson(res, 200, {
         jsonrpc: "2.0",

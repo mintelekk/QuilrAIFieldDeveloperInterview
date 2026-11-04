@@ -8,10 +8,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 
+// Share one ID rule across tools so malformed customer references are rejected consistently.
 const customerIdSchema = z.string().regex(/^CUST-[A-Z0-9]{5}$/, {
   message: "customer_id must match CUST-XXXXX (five uppercase letters or digits)",
 });
 
+// Strict objects stop callers from smuggling unused fields past validation.
 const customerInput = z.object({ customer_id: customerIdSchema }).strict();
 const refundInput = z
   .object({
@@ -26,6 +28,7 @@ const server = new Server(
   { capabilities: { tools: {} } },
 );
 
+// Advertise the same Zod schemas that the request handler enforces below.
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -41,6 +44,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
+// The low-level SDK handler lets validation failures become JSON-RPC InvalidParams (-32602).
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   let parsed:
@@ -48,6 +52,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     | z.infer<typeof refundInput>;
 
   if (name === "get_customer_record") {
+    // Parse before touching arguments so invalid input never reaches tool logic.
     const result = customerInput.safeParse(args ?? {});
     if (!result.success) {
       throw new McpError(
@@ -73,6 +78,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === "trigger_refund") {
+    // Reject non-finite or non-positive amounts, short reasons, and unknown fields.
     const result = refundInput.safeParse(args ?? {});
     if (!result.success) {
       throw new McpError(
@@ -86,6 +92,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         {
           type: "text",
           text: JSON.stringify({
+            // This example returns a simulation; connect a real payment adapter explicitly.
             status: "accepted",
             refund_id: `REF-${crypto.randomUUID()}`,
             customer_id: parsed.customer_id,
@@ -101,6 +108,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
 });
 
+// Stdio transport owns stdout for JSON-RPC. Keep diagnostics on stderr.
 const transport = new StdioServerTransport();
 server.connect(transport).catch((error: unknown) => {
   console.error("Customer/refund MCP server failed:", error);
