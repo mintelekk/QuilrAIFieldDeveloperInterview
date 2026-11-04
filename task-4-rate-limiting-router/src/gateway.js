@@ -11,8 +11,10 @@ const PROVIDER_TIMEOUT_MS = 3_000;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_COMPLETION_TOKENS = 1024;
+// Resolve the database path once so every request uses the same persistent quota ledger.
 const DATABASE_PATH = resolve(process.env.DATABASE_PATH ?? "./data/gateway.sqlite");
 
+// Fail fast at startup rather than accepting traffic with an incomplete provider setup.
 function readProvider(name, defaults) {
   const url = process.env[`${name}_API_URL`];
   const apiKey = process.env[`${name}_API_KEY`];
@@ -141,11 +143,13 @@ function estimateTokens(text) {
   return total;
 }
 
+// Turn the caller's credential into a stable tenant key without retaining the secret itself.
 function bearerTenantHash(header) {
   const match = /^Bearer\s+([^\s]+)$/i.exec(header ?? "");
   return match ? createHash("sha256").update(match[1]).digest("hex") : null;
 }
 
+// Keep client errors predictable and make sure internal exceptions never become response text.
 function sendGatewayError(res, statusCode, code, message, requestId, details = {}) {
   const body = Buffer.from(JSON.stringify({
     error: {
@@ -166,6 +170,7 @@ function sendGatewayError(res, statusCode, code, message, requestId, details = {
   res.end(body);
 }
 
+// Bound request buffering so a large or malformed body cannot consume unbounded memory.
 async function readRequestJson(req) {
   const chunks = [];
   let bytes = 0;
@@ -177,6 +182,7 @@ async function readRequestJson(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+// Provider responses are buffered only up to a fixed cap because this gateway returns JSON bodies.
 async function readProviderJson(response) {
   if (!response.body) throw new Error("provider returned no response body");
   const chunks = [];
@@ -235,6 +241,7 @@ async function callProvider(provider, requestPayload, clientSignal) {
   }
 }
 
+// Prefer the provider's authoritative usage count; retain the reservation when usage is absent or invalid.
 function actualUsageTokens(payload, reservation) {
   const total = payload?.usage?.total_tokens;
   return Number.isSafeInteger(total) && total >= 0 ? total : reservation;
@@ -265,6 +272,7 @@ async function handleGatewayRequest(req, res, requestId) {
     sendGatewayError(res, 400, "invalid_request", "A chat completion request with a messages array is required", requestId);
     return;
   }
+  // Streaming is rejected because this implementation needs final usage to settle the quota reservation.
   if (payload.stream === true) {
     sendGatewayError(res, 400, "streaming_not_supported", "This router accepts non-streaming completion requests", requestId);
     return;
@@ -316,6 +324,7 @@ async function handleGatewayRequest(req, res, requestId) {
   }
 
   const clientController = new AbortController();
+  // Stop provider work if the client disconnects before the gateway finishes its response.
   res.on("close", () => {
     if (!res.writableEnded) clientController.abort();
   });
@@ -356,6 +365,7 @@ async function handleGatewayRequest(req, res, requestId) {
 }
 
 const gateway = createServer((req, res) => {
+  // One request ID ties the gateway response to the corresponding quota event and log context.
   const requestId = randomUUID();
   void handleGatewayRequest(req, res, requestId).catch(() => {
     console.error("Unhandled gateway request failure.");
@@ -383,6 +393,7 @@ gateway.listen(PORT, "127.0.0.1", () => {
 });
 
 function shutdown() {
+  // Stop periodic work, drain HTTP requests, then close SQLite cleanly.
   clearInterval(cleanupTimer);
   gateway.close(() => {
     database.close();

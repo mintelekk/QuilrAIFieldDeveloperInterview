@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 
 const PORT = Number(process.env.MOCK_PORT ?? 4201);
 
+// Use the same JSON response framing for success and failure scenarios.
 function sendJson(res, status, payload) {
   const body = Buffer.from(JSON.stringify(payload));
   res.writeHead(status, {
@@ -25,6 +26,7 @@ const mock = createServer(async (req, res) => {
 
   let payload;
   try {
+    // Read the request body so the success response can echo the selected provider model.
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
